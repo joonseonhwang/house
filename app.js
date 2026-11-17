@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -433,10 +433,40 @@ function roomInfo() {
     <div class="sub">${h(rDims(r))}${its.length ? ' · ' + its.map(i => h(i.name)).join(', ') : ''}</div></div>
     <button class="btn sm" data-act="room" data-id="${h(r.id)}">수정</button></div>`;
 }
+// 내장 평면도(확장형): 도면 이미지를 따라 그린 방 모양·추정 ㎡ (m, 벽 중심선). 공개 저장소라 동·호수·단지명 등은 넣지 않는다.
+// 방 id는 기존 평면도(plan-A)와 같게 맞춰서, 넣어도 품목에 연결한 방·실측 ㎡·메모가 유지된다.
+const BUILTIN_PLAN = { id: 'plan-A', src: 'builtin-expanded-1', name: '우리집 (확장형)', area: 84.98, north: 0,
+  note: '발코니 확장형 도면을 따라 그린 벽 중심선 기준 추정치. 실내 합계가 전용면적보다 큰 만큼이 확장한 발코니 면적(추정). 실측하면 방마다 입력.',
+  rooms: [ // [id, 이름, 종류, 추정㎡, 꼭짓점]
+    ["pA-r0","안방","room",15.58,[[1.52,0.0],[5.31,0.0],[5.31,4.11],[1.52,4.11]]],
+    ["pA-r2","침실3","room",13.01,[[10.47,3.77],[13.65,3.77],[13.65,7.86],[10.47,7.86]]],
+    ["pA-r1","침실2","room",10.99,[[7.68,5.25],[10.47,5.25],[10.47,9.18],[7.68,9.18]]],
+    ["pA-r3","거실","living",34.26,[[0.43,4.11],[9.72,4.11],[9.72,3.77],[10.47,3.77],[10.47,5.25],[5.61,5.25],[5.61,9.34],[1.4,9.34],[1.4,9.95],[0.0,9.95],[0.0,8.08],[0.43,8.08]]],
+    ["pA-r4","주방·식당","kitchen",9.22,[[1.4,9.34],[5.61,9.34],[5.61,11.53],[1.4,11.53]]],
+    ["pA-r5","드레스룸","closet",5.28,[[5.31,0.0],[7.54,0.0],[7.54,2.37],[5.31,2.37]]],
+    ["pA-r6","안방 욕실","bath",3.88,[[5.31,2.37],[7.54,2.37],[7.54,4.11],[5.31,4.11]]],
+    ["pA-r7","공용 욕실","bath",4.69,[[5.61,5.25],[7.68,5.25],[7.68,7.52],[5.61,7.52]]],
+    ["pA-r8","현관","entry",2.22,[[8.45,2.37],[9.72,2.37],[9.72,4.11],[8.45,4.11]]],
+    ["pA-r9","신발장","closet",1.59,[[7.54,2.37],[8.45,2.37],[8.45,4.11],[7.54,4.11]]],
+    ["pA-r15","수납","closet",1.41,[[0.51,9.95],[1.4,9.95],[1.4,11.53],[0.51,11.53]]],
+    ["pA-r14","발코니(안방)","balcony",6.06,[[0.0,0.0],[1.52,0.0],[1.52,4.11],[0.43,4.11],[0.43,3.67],[0.0,3.67]]],
+    ["pA-r12","발코니(욕실)","balcony",2.64,[[5.61,7.52],[7.68,7.52],[7.68,8.79],[5.61,8.79]]],
+    ["pA-r13","발코니(주방)","balcony",6.06,[[1.4,11.53],[5.61,11.53],[5.61,12.96],[1.4,12.96]]],
+  ] };
+const hasBuiltin = () => S.plans.some(x => x.src === BUILTIN_PLAN.src);
+async function putBuiltinPlan() {
+  const B = BUILTIN_PLAN, old = S.plans.find(x => x.id === B.id);
+  if (!await ask(old ? `'${old.name}' 평면도를 확장형 모양으로 바꿔요. 방에 넣은 실측 ㎡·메모, 품목에 연결한 방은 그대로 둬요.` : '확장형 평면도를 넣어요.', '넣기')) return;
+  const keep = new Map((old?.rooms || []).map(r => [r.id, r]));
+  const rooms = B.rooms.map(([id, name, kind, est, pts]) => ({ id, name, kind, est, pts, m2: keep.get(id)?.m2 ?? null, note: keep.get(id)?.note || '' }));
+  const name = !old ? B.name : /확장형/.test(old.name) ? old.name : old.name.replace(/\s*\([^)]*\)\s*$/, '') + ' 확장형';
+  await put('plans', { ...(old || {}), id: B.id, src: B.src, name, area: old?.area || B.area, north: B.north, note: B.note, needsCheck: false, checkNote: '', rooms });
+  await setMeta('activePlan', B.id); UI.room = null; toast('확장형 평면도를 넣었어요'); render();
+}
 function vPlan() {
   const p = plan();
-  if (!p) return `<div class="card"><h2>평면도</h2><div class="empty">평면도 데이터가 없어요.<br>평면도 파일을 '백업 파일 불러오기'로 넣으세요.</div>
-    <button class="btn pri" data-act="import">백업 파일 불러오기</button></div>`;
+  if (!p) return `<div class="card"><h2>평면도</h2><div class="empty">평면도 데이터가 없어요.<br>아래 버튼으로 확장형 평면도를 넣거나, 평면도 파일을 '백업 파일 불러오기'로 넣으세요.</div>
+    <button class="btn pri" data-act="builtinplan">확장형 평면도 넣기</button><button class="btn" data-act="import">백업 파일 불러오기</button></div>`;
   const rooms = p.rooms || [], inn = rooms.filter(r => r.kind !== 'balcony'), bal = rooms.filter(r => r.kind === 'balcony');
   const ai = inn.reduce((t, r) => t + rArea(r), 0), ab = bal.reduce((t, r) => t + rArea(r), 0);
   let o = S.plans.length > 1 ? `<div class="chips">${S.plans.map(x => `<button class="chip ${x.id === p.id ? 'on' : ''}" data-act="plan" data-id="${h(x.id)}">${h(x.name)}</button>`).join('')}</div>` : '';
@@ -451,6 +481,8 @@ function vPlan() {
     <div class="kv"><span>발코니 합계 (서비스 면적)</span><b>${m2s(ab)} · ${py(ab)}평</b></div>
     ${p.note ? `<div class="sub" style="margin-top:6px">${h(p.note)}</div>` : ''}</div>`;
   o += `<div class="card"><h2>공간별 면적 <small>${rooms.length}곳</small></h2>${[...inn, ...bal].map(roomRow).join('')}</div>`;
+  if (!hasBuiltin()) o += `<div class="card"><h2>확장형 평면도</h2><div class="sub" style="margin-bottom:8px">발코니 확장형 도면(거실이 왼쪽 위)으로 바꿀 수 있어요. 방별 실측 ㎡·메모와 품목 연결은 유지돼요.</div>
+    <button class="btn pri" data-act="builtinplan">확장형 평면도로 바꾸기</button></div>`;
   return o;
 }
 let HIT = [], NDIR = null, rafId = 0; // NDIR: 나침반 N이 가리키는 화면 방향(단위 벡터, 테스트용)
@@ -597,6 +629,7 @@ view.addEventListener('click', async e => {
   if (a === 'plan') { UI.room = null; await setMeta('activePlan', id); return render(); }
   if (a === 'room') { const p = plan(), r = p?.rooms?.find(x => x.id === id); return r && editRoom(p, r); }
   if (a === 'cam') { UI.cam = id === 'top' ? { yaw: 0, pitch: Math.PI / 2, zoom: 1 } : { yaw: -0.55, pitch: 0.9, zoom: 1 }; return drawPlan(); }
+  if (a === 'builtinplan') return putBuiltinPlan();
   if (a === 'import') return pickFile();
   if (a === 'export') return exportBackup();
   if (a === 'share') return shareBackup();
