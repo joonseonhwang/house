@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -173,7 +173,7 @@ function openForm({ title, fields, value, raw, intro, onSave, onDelete }) {
     const val = v[f.key] ?? '';
     if (f.type === 'check') html += `<label class="f ck"><input type="checkbox" data-k="${f.key}" ${val ? 'checked' : ''}><span>${h(f.label)}</span></label>`;
     else if (f.type === 'select') html += `<label class="f"><span>${h(f.label)}</span><select data-k="${f.key}">${f.options.map(o => typeof o === 'string' ? { v: o, l: o } : o)
-      .map(o => `<option value="${h(o.v)}" ${o.v === val ? 'selected' : ''}>${h(o.l)}</option>`).join('')}</select></label>`;
+      .map(o => `<option value="${h(o.v)}" ${String(o.v) === String(val) ? 'selected' : ''}>${h(o.l)}</option>`).join('')}</select></label>`;
     else if (f.type === 'decimal') html += `<label class="f"><span>${h(f.label)}</span><input type="number" inputmode="decimal" step="0.01" data-k="${f.key}" value="${h(val)}" placeholder="${h(f.ph || '')}"></label>`;
     else if (f.type === 'textarea') html += `<label class="f"><span>${h(f.label)}</span><textarea data-k="${f.key}">${h(val)}</textarea></label>`;
     else if (f.type === 'money') html += `<label class="f"><span>${h(f.label)} (만원)</span><input type="number" inputmode="decimal" step="any" data-k="${f.key}" data-money value="${h(val)}" placeholder="예: 3100"><div class="hint"></div></label>`;
@@ -249,11 +249,18 @@ function roomField(cur) {
   if (cur && !opts.some(o => o.v === cur)) opts.push({ v: cur, l: (findRoom(cur)?.name || '삭제된 방') + ' (다른 평면도)' });
   return [{ key: 'room', label: '설치할 방', type: 'select', options: opts }];
 }
+// 북쪽 방향: '위에서' 화면의 위쪽에서 시계 방향으로 잰 각도(도). 비어 있으면 나침반을 그리지 않는다
+const NORTHS = [['', '표시 안 함'], [0, '위쪽 ↑'], [45, '오른쪽 위 ↗'], [90, '오른쪽 →'], [135, '오른쪽 아래 ↘'], [180, '아래쪽 ↓'], [225, '왼쪽 아래 ↙'], [270, '왼쪽 ←'], [315, '왼쪽 위 ↖']];
+const hasNorth = p => p?.north != null && p.north !== '' && isFinite(p.north);
 function editPlan(r) {
+  const opts = NORTHS.map(([v, l]) => ({ v, l }));
+  if (hasNorth(r) && !opts.some(o => String(o.v) === String(r.north))) opts.push({ v: r.north, l: r.north + '°' });
   openForm({
     title: '평면도 정보 수정', value: r,
-    fields: [{ key: 'name', label: '이름' }, { key: 'area', label: '전용면적 (㎡, 서류 기준)', type: 'decimal' }, { key: 'note', label: '메모', type: 'textarea' }, ...CHECKF],
-    onSave: async o => { await put('plans', o); await setMeta('activePlan', o.id); },
+    fields: [{ key: 'name', label: '이름' }, { key: 'area', label: '전용면적 (㎡, 서류 기준)', type: 'decimal' },
+      { key: 'north', label: "북쪽 방향 ('위에서' 화면 기준)", type: 'select', options: opts },
+      { key: 'note', label: '메모', type: 'textarea' }, ...CHECKF],
+    onSave: async o => { o.north = o.north === '' ? null : Number(o.north); await put('plans', o); await setMeta('activePlan', o.id); },
     onDelete: async () => { await del('plans', r.id); UI.room = null; },
   });
 }
@@ -446,7 +453,7 @@ function vPlan() {
   o += `<div class="card"><h2>공간별 면적 <small>${rooms.length}곳</small></h2>${[...inn, ...bal].map(roomRow).join('')}</div>`;
   return o;
 }
-let HIT = [], rafId = 0;
+let HIT = [], NDIR = null, rafId = 0; // NDIR: 나침반 N이 가리키는 화면 방향(단위 벡터, 테스트용)
 const reqDraw = () => { if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; drawPlan(); }); };
 function drawPlan() {
   const cv = $('#cv'), p = plan(); if (!cv || !p) return;
@@ -508,6 +515,23 @@ function drawPlan() {
         g.font = '10px system-ui,sans-serif'; g.fillStyle = '#ffd08a'; g.fillText(tt, sx, sy2 + 7); }
       else { g.font = '9px system-ui,sans-serif'; g.fillStyle = bal ? '#c7cede' : '#ffd08a'; g.fillText(tt, sx, sy2); }
       break;
+    }
+  }
+  // 4) 나침반 — 도면의 북쪽(위쪽 기준 시계 방향 north°)을 지금 카메라 각도로 투영해서 그림
+  NDIR = null;
+  if (hasNorth(p)) {
+    const t = Number(p.north) * Math.PI / 180, a = P(mx, mz), b = P(mx + Math.sin(t), mz - Math.cos(t));
+    let dx = b[0] - a[0], dy = b[1] - a[1]; const L = Math.hypot(dx, dy);
+    if (L > 1e-6) {
+      dx /= L; dy /= L; NDIR = [dx, dy]; const R = 17, cx = W - R - 9, cy2 = H - R - 9;
+      g.beginPath(); g.arc(cx, cy2, R, 0, Math.PI * 2); g.fillStyle = 'rgba(10,13,20,.7)'; g.fill();
+      g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1; g.stroke();
+      const tri = (s, col) => { g.beginPath(); g.moveTo(cx + dx * s * (R - 4), cy2 + dy * s * (R - 4));
+        g.lineTo(cx - dy * 4, cy2 + dx * 4); g.lineTo(cx + dy * 4, cy2 - dx * 4); g.closePath(); g.fillStyle = col; g.fill(); };
+      tri(-1, '#8b93a7'); tri(1, '#ff5a5a');
+      g.font = '700 10px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff';
+      const lx = cx + dx * (R + 7), ly = cy2 + dy * (R + 7);
+      g.fillText('N', Math.min(W - 6, Math.max(6, lx)), Math.min(H - 6, Math.max(6, ly)));
     }
   }
   g.textAlign = 'left'; g.font = '10px system-ui,sans-serif'; g.fillStyle = '#98a2b8';
@@ -590,5 +614,5 @@ window.addEventListener('appinstalled', () => { installEvt = null; navigator.sto
   if (!S.meta.firstUse) await setMeta('firstUse', Date.now());
   render();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.X = { S, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT };
+  window.X = { S, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
 })();
