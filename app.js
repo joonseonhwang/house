@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.3';
+const APP_VERSION = '1.1.4';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -641,11 +641,36 @@ view.addEventListener('click', async e => {
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (route() === 'home') render(); });
 window.addEventListener('appinstalled', () => { installEvt = null; navigator.storage?.persist?.(); render(); });
 
+const BUILTIN_PACK = { key: 'appliances-2611', items: [{"id":"i-hd-07","cat":"가전","name":"레인지후드","status":"검토중","note":"[사용자 결정] 인덕션 위. 할 일: 기본 후드 교체 여부, 덕트 위치, 폭은 인덕션 이상, 연동 원하면 인덕션과 같은 브랜드","room":"pA-r4","needsCheck":false,"checkNote":"","order":1007},{"id":"i-hd-08","cat":"가전","name":"세탁기","status":"검토중","note":"[Claude 추측] 발코니(약 2㎡) 또는 안방 발코니 추정. 할 일: 세탁기 자리 실측, 급배수 위치","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1008},{"id":"i-hd-09","cat":"가전","name":"건조기","status":"검토중","note":"[Claude 추측] 세탁기와 직렬 설치 여부 확인","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1009},{"id":"i-hd-10","cat":"가전","name":"TV","status":"검토중","note":"[Claude 추측] 거실","room":"pA-r3","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1010},{"id":"i-hd-11","cat":"가전","name":"김치냉장고","status":"검토중","note":"[Claude 추측] 놓을 자리 확인","room":"pA-r4","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1011},{"id":"i-hd-13","cat":"가전","name":"전자레인지","status":"검토중","note":"[Claude 추측] 광파오븐을 사면 생략","room":"pA-r4","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1013},{"id":"i-hd-14","cat":"가전","name":"밥솥","status":"검토중","note":"[Claude 추측]","room":"pA-r4","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1014},{"id":"i-hd-16","cat":"가전","name":"무선청소기","status":"검토중","note":"[Claude 추측]","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1016},{"id":"i-hd-17","cat":"가전","name":"공기청정기","status":"검토중","note":"[Claude 추측] 거실·안방","room":"pA-r3","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1017},{"id":"i-hd-18","cat":"가전","name":"비데 ×2","status":"검토중","note":"[Claude 추측] 안방 욕실·공용 욕실","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1018},{"id":"i-hd-19","cat":"가전","name":"가습기","status":"검토중","note":"[Claude 추측]","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1019},{"id":"i-hd-20","cat":"가전","name":"의류관리기","status":"검토중","note":"[Claude 추측] 선택","room":"pA-r5","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1020},{"id":"i-hd-21","cat":"가전","name":"인터넷 공유기·IPTV","status":"검토중","note":"[Claude 추측]","room":"pA-r3","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1021},{"id":"i-hd-22","cat":"가전","name":"젖병소독기","status":"검토중","note":"[Claude 추측] 필요하면","room":"pA-r4","needsCheck":true,"checkNote":"Claude가 추측한 가전 — 필요한지 확인","order":1022}], notes: [{"id":"i-a4","add":"[파트리스트 11/21] 거실 스탠드(18~20평형 추정) + 안방·침실 벽걸이(6평형). 할 일: 시스템에어컨 옵션·배관 선매립 확인, 실외기 자리, 2in1/3in1 결정","room":"pA-r3"},{"id":"i-int-x15","add":"[파트리스트 11/21] 거실 소파 위(52인치 안팎 추정), 안방은 선택. 할 일: 천장 높이 실측, 천장 보강·전선 위치, 조명 일체형 여부","room":"pA-r3"},{"id":"i-a1","add":"[파트리스트 11/21] 주방 냉장고장. 할 일: 자리 폭·높이·깊이 실측, 문 열림 방향, 반입 크기(엘리베이터·현관)","room":"pA-r4"},{"id":"i-a2","add":"[파트리스트 11/21] 싱크 하부장 빌트인. 할 일: 60cm 한 칸 비울 수 있는지, 급배수·콘센트, 12/14인용 결정","room":"pA-r4"},{"id":"i-a3","add":"[파트리스트 11/21] 키큰장 또는 인덕션 아래. 할 일: 오븐장 실측, 전기 용량, 광파오븐 여부","room":"pA-r4"},{"id":"i-a5","add":"[파트리스트 11/21] 주방 상판. 할 일: 상판 구멍 크기, 220V 전용 회로·차단기, 가스 배관 막음","room":"pA-r4"},{"id":"i-int-x19","add":"[파트리스트 11/21] ","room":"pA-r4"},{"id":"i-int-x18","add":"[파트리스트 11/21] ","room":null}] };
+// 앱을 열 때 한 번만: 기존 데이터가 있을 때(=사용자 폰) 가전 목록을 합친다. 기존 기록은 지우지 않는다.
+//  - 새 품목: 같은 id나 같은 이름(공백·괄호 제외)이 있으면 건너뜀
+//  - 기존 품목: 메모가 비었으면 채우고, 있으면 끝에 덧붙임(이미 덧붙였으면 생략). 방은 비어 있을 때만. 상태·금액은 그대로
+//  - 바꾸기 전 품목 전체를 meta 'packBackup'에 남기고, 한 번의 transaction으로 처리(실패하면 아무것도 안 바뀜)
+const normName = s => String(s || '').replace(/\(.*?\)/g, '').replace(/\s+/g, '').toLowerCase();
+async function applyPack() {
+  const P = BUILTIN_PACK;
+  if (S.meta.pack === P.key || !hasData()) return 0;
+  const now = Date.now(), byId = new Map(S.items.map(i => [i.id, i])), names = new Set(S.items.map(i => normName(i.name)));
+  const adds = P.items.filter(i => !byId.has(i.id) && !names.has(normName(i.name))).map(i => ({ ...i, budget: null, price: null, brand: '', model: '', shop: '', url: '', updatedAt: now }));
+  const ups = P.notes.map(n => { const o = byId.get(n.id); if (!o || (o.note || '').includes(n.add)) return null;
+    return { ...o, note: o.note ? `${o.note} / ${n.add}` : n.add, room: o.room || n.room || undefined, updatedAt: now }; }).filter(Boolean);
+  await tx(['items', 'meta'], t => {
+    const m = t.objectStore('meta');
+    m.put({ key: 'packBackup', value: { key: P.key, at: now, items: S.items } });
+    adds.concat(ups).forEach(r => t.objectStore('items').put(r));
+    m.put({ key: 'pack', value: P.key });
+  });
+  await loadAll();
+  return adds.length + ups.length ? { adds: adds.length, ups: ups.length } : 0;
+}
+
 /* ---------- 시작 ---------- */
 (async () => {
   db = await openDB(); await loadAll();
   if (!S.meta.firstUse) await setMeta('firstUse', Date.now());
+  let pk = 0; try { pk = await applyPack(); } catch (e) { console.warn('pack', e); }
   render();
+  if (pk) toast(`가전 목록을 넣었어요 (새 품목 ${pk.adds}개 · 메모 보강 ${pk.ups}개)`);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.X = { S, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
+  window.X = { S, applyPack, BUILTIN_PACK, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
 })();
