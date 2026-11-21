@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.4';
+const APP_VERSION = '1.1.5';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -458,7 +458,7 @@ async function putBuiltinPlan() {
   const B = BUILTIN_PLAN, old = S.plans.find(x => x.id === B.id);
   if (!await ask(old ? `'${old.name}' 평면도를 확장형 모양으로 바꿔요. 방에 넣은 실측 ㎡·메모, 품목에 연결한 방은 그대로 둬요.` : '확장형 평면도를 넣어요.', '넣기')) return;
   const keep = new Map((old?.rooms || []).map(r => [r.id, r]));
-  const rooms = B.rooms.map(([id, name, kind, est, pts]) => ({ id, name, kind, est, pts, m2: keep.get(id)?.m2 ?? null, note: keep.get(id)?.note || '' }));
+  const rooms = B.rooms.map(([id, name, kind, est, pts]) => ({ id, name, kind, est, pts, m2: keep.get(id)?.m2 ?? BUILTIN_M2.rooms[id]?.[0] ?? null, note: keep.get(id)?.note || BUILTIN_M2.rooms[id]?.[1] || '' }));
   const name = !old ? B.name : /확장형/.test(old.name) ? old.name : old.name.replace(/\s*\([^)]*\)\s*$/, '') + ' 확장형';
   await put('plans', { ...(old || {}), id: B.id, src: B.src, name, area: old?.area || B.area, north: B.north, note: B.note, needsCheck: false, checkNote: '', rooms });
   await setMeta('activePlan', B.id); UI.room = null; toast('확장형 평면도를 넣었어요'); render();
@@ -664,13 +664,46 @@ async function applyPack() {
   return adds.length + ups.length ? { adds: adds.length, ups: ups.length } : 0;
 }
 
+// 실측 평면도(2026-11 실측 도면)의 방 면적을 plan-A 방의 실측 ㎡(m2)로 한 번만 넣는다.
+//  - 실측 ㎡가 비어 있는 방만 채움(사용자가 직접 넣은 값은 그대로). 메모에 근거를 덧붙임
+//  - 실측 도면에서 한 칸으로 표기된 곳(안방+드레스룸, 거실+주방)은 치수로 나눈 값
+//  - 바꾸기 전 평면도를 meta 'm2Backup'에 남김
+const BUILTIN_M2 = { key: 'm2-2611', plan: 'plan-A', rooms: {
+  'pA-r0': [12.2, '실측 도면 15㎡(드레스룸 포함)에서 드레스룸 몫을 뺀 값'],
+  'pA-r5': [2.8, '실측 도면 안방 15㎡에 포함, 치수 약 1.84×1.52m로 나눔(추정)'],
+  'pA-r6': [3.0, '실측 도면 3㎡(1.86×1.61m)'],
+  'pA-r14': [4.0, '실측 도면 4㎡'],
+  'pA-r2': [9.8, '실측 도면 10㎡(2.73×3.59m)'],
+  'pA-r1': [8.0, '실측 도면 8㎡'],
+  'pA-r7': [3.3, '실측 도면 3㎡(1.73×1.90m)'],
+  'pA-r12': [2.0, '실측 도면 2㎡'],
+  'pA-r3': [31.7, '실측 도면 거실 39㎡(주방·복도 포함)에서 주방 몫을 뺀 값'],
+  'pA-r4': [7.3, '실측 도면 거실 39㎡에 포함, 치수 2.95×2.49m로 나눔(추정)'],
+} };
+async function applyM2() {
+  const P = BUILTIN_M2, p = S.plans.find(x => x.id === P.plan);
+  if (S.meta.m2pack === P.key || !p) return 0;
+  let n = 0;
+  const rooms = (p.rooms || []).map(r => { const v = P.rooms[r.id]; if (!v || r.m2 != null) return r; n++;
+    return { ...r, m2: v[0], note: r.note ? (r.note.includes(v[1]) ? r.note : `${r.note} / ${v[1]}`) : v[1] }; });
+  await tx(['plans', 'meta'], t => {
+    const m = t.objectStore('meta');
+    if (n) { m.put({ key: 'm2Backup', value: { key: P.key, at: Date.now(), plan: p } }); t.objectStore('plans').put({ ...p, rooms, updatedAt: Date.now() }); }
+    m.put({ key: 'm2pack', value: P.key });
+  });
+  await loadAll();
+  return n;
+}
+
 /* ---------- 시작 ---------- */
 (async () => {
   db = await openDB(); await loadAll();
   if (!S.meta.firstUse) await setMeta('firstUse', Date.now());
   let pk = 0; try { pk = await applyPack(); } catch (e) { console.warn('pack', e); }
+  let mk = 0; try { mk = await applyM2(); } catch (e) { console.warn('m2', e); }
   render();
   if (pk) toast(`가전 목록을 넣었어요 (새 품목 ${pk.adds}개 · 메모 보강 ${pk.ups}개)`);
+  else if (mk) toast(`평면도에 실측 면적을 넣었어요 (방 ${mk}개)`);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.X = { S, applyPack, BUILTIN_PACK, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
+  window.X = { S, applyPack, BUILTIN_PACK, applyM2, BUILTIN_M2, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
 })();
