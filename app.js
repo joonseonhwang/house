@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.8';
+const APP_VERSION = '1.1.9';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -606,15 +606,157 @@ function render() {
   const r = route(), [title, fn] = VIEWS[r];
   $('#title').textContent = title;
   document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === r));
-  $('#topact').innerHTML = r === 'pay' || r === 'items' ? '<button data-act="top-add">＋ 추가</button>' : '';
+  $('#topact').innerHTML = (SHARE_VIEWS.includes(r) && hasData() ? '<button class="shr" data-act="top-share" aria-label="카톡 공유">📤 공유</button>' : '')
+    + (r === 'pay' || r === 'items' ? '<button data-act="top-add">＋ 추가</button>' : '');
   const y = scrollY; view.innerHTML = fn(); scrollTo(0, y);
   if (r === 'plan') { bindCanvas(); drawPlan(); }
   if (r === 'more' && navigator.storage?.persisted) navigator.storage.persisted().then(p => { const el = $('#persist'); if (el) el.textContent = p ? '보호됨 — 브라우저가 임의로 지우지 않아요' : '보호 안 됨 — 저장공간이 부족하면 지워질 수 있어요'; });
 }
 window.addEventListener('hashchange', () => { scrollTo(0, 0); render(); });
 
+/* ---------- 카톡 공유: 지금 화면을 이미지 한 장 + 글로 ---------- */
+// 카톡은 이미지와 글을 한 번에 받으면 글을 빠뜨리는 일이 있어, 이미지를 보낼 때 글은 클립보드에 복사해 둔다.
+const SHARE_VIEWS = ['home', 'money', 'pay', 'items', 'plan'];
+const md = s => s ? Number(s.slice(5, 7)) + '/' + Number(s.slice(8, 10)) : '';
+function shareDoc(r) {
+  const n = new Date(), d = { title: r === 'home' ? '우리집 요약' : VIEWS[r][0], date: `${n.getMonth() + 1}/${n.getDate()}`, secs: [] };
+  const pr = p => ({ t: p.name, v: won(p.amount), s: [p.cat, md(p.date), !p.done && p.date ? dday(p.date) : ''].filter(Boolean).join(' · '), done: !!p.done, mark: true });
+  const sc = scen();
+  if (sc && (r === 'home' || r === 'money')) {
+    const t = totals(sc.id), gap = t.cost - t.fund;
+    d.secs.push({ h: '자금 · ' + sc.name, rows: [{ t: '총 비용', v: won(t.cost) }, { t: '마련된 재원', v: won(t.fund) },
+      { t: gap > 0 ? '부족한 금액' : '여유', v: won(Math.abs(gap)), em: gap > 0 ? 'bad' : 'ok' }, { t: '실제 지출', v: `${won(t.paid)} (${pct(t.paid, t.cost)}%)` }] });
+    if (r === 'money') {
+      d.secs.push({ h: '비용', rows: t.c.map(b => ({ t: b.name, v: won(b.amount), s: b.paid ? '지출 ' + won(b.paid) : '' })), foot: won(t.cost) });
+      d.secs.push({ h: '재원', rows: t.f.map(b => ({ t: b.name, v: won(b.amount) })), foot: won(t.fund) });
+    }
+  }
+  if (r === 'home') {
+    const un = S.payments.filter(p => !p.done), before = un.filter(p => p.when === '잔금 전');
+    const next = [...un].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || a.order - b.order).slice(0, 5);
+    d.secs.push({ h: '지급', rows: [{ t: '잔금 전 필요 (남은 것)', v: won(sum(before)), em: 'acc' }, { t: '남은 지급 전체', v: won(sum(un)) }] });
+    if (next.length) d.secs.push({ h: '다가오는 지급', rows: next.map(pr) });
+    d.secs.push({ h: '구매·공사', rows: ITEMCATS.map(c => { const a = S.items.filter(i => i.cat === c); return { t: c, v: won(sum(a, 'price')), s: `완료 ${a.filter(i => i.status === '완료').length}/${a.length}` }; }) });
+  }
+  if (r === 'pay') {
+    const done = S.payments.filter(p => p.done);
+    d.secs.push({ h: '요약', rows: [{ t: '전체', v: won(sum(S.payments)) }, { t: '지급 완료', v: won(sum(done)), em: 'ok' }, { t: '남음', v: won(sum(S.payments) - sum(done)), em: 'acc' }] });
+    for (const w of WHENS) {
+      const a = S.payments.filter(p => (WHENS.includes(p.when) ? p.when : '미정') === w);
+      if (a.length) d.secs.push({ h: `${w} · 남음 ${won(sum(a.filter(p => !p.done)))}`, rows: a.map(pr), foot: won(sum(a)) });
+    }
+  }
+  if (r === 'items') {
+    const a = S.items.filter(i => (UI.itemCat === '전체' || i.cat === UI.itemCat) && (!UI.q || match([i.name, i.brand, i.model, i.shop, i.note, i.cat, i.status].join(' '), UI.q)));
+    if (UI.itemCat !== '전체' || UI.q) d.title += ' · ' + [UI.itemCat !== '전체' && UI.itemCat, UI.q && `"${UI.q}"`].filter(Boolean).join(' ');
+    for (const s of STATUSES) {
+      const b = a.filter(i => i.status === s);
+      if (b.length) d.secs.push({ h: `${s} ${b.length}건`, rows: b.map(i => ({ t: i.name, v: i.price != null ? won(i.price) : i.budget != null ? '예산 ' + won(i.budget) : '', s: [i.cat, [i.brand, i.model].filter(Boolean).join(' ')].filter(Boolean).join(' · ') })) });
+    }
+    d.secs.push({ h: '합계', rows: [{ t: '예산', v: won(sum(a, 'budget')) }, { t: '실제 금액', v: won(sum(a, 'price')), em: 'acc' }] });
+  }
+  if (r === 'plan') {
+    const p = plan();
+    if (p) {
+      const rs = p.rooms || [], tot = rs.reduce((t, x) => t + rArea(x), 0);
+      d.title = '평면도 · ' + p.name;
+      d.secs.push({ h: `방 면적 · 합계 ${m2s(tot)} (${py(tot)}평)`, rows: rs.map(x => ({ t: x.name, v: `${m2s(rArea(x))} · ${py(rArea(x))}평`, s: measured(x) ? '실측' : '도면 추정' })) });
+      const cv = $('#cv'); if (cv && cv.width) d.img = cv;
+    }
+  }
+  return d;
+}
+function shareText(d) {
+  let o = `[우리집노트] ${d.title} (${d.date} 기준)`;
+  for (const s of d.secs) {
+    o += `\n\n■ ${s.h}`;
+    for (const r of s.rows) o += `\n${r.mark ? (r.done ? '✅' : '⬜') : '·'} ${r.t}: ${r.v}${r.s ? ` (${r.s})` : ''}`;
+    if (s.foot) o += `\n  합계 ${s.foot}`;
+  }
+  return o;
+}
+function shareImage(d) {
+  const W = 1080, P = 44, CP = 34, F = 'system-ui,-apple-system,"Noto Sans KR","Malgun Gothic",sans-serif', MAX = 40;
+  const C = { bg: '#f2f2f7', card: '#ffffff', tx: '#1c1c1e', sub: '#8e8e93', line: '#e5e5ea', acc: '#c96a00', ok: '#1f9d55', bad: '#e5484d' };
+  const secs = d.secs.map(s => ({ ...s, rows: s.rows.length > MAX ? [...s.rows.slice(0, MAX), { t: `외 ${s.rows.length - MAX}건`, v: '' }] : s.rows }));
+  const rowH = r => r.s ? 96 : 70, imgH = d.img ? Math.round((W - 2 * P) * d.img.height / d.img.width) : 0;
+  const cardH = s => CP + 54 + s.rows.reduce((t, r) => t + rowH(r), 0) + (s.foot ? 70 : 0) + CP - 10;
+  const H = P + 150 + (imgH ? imgH + 28 : 0) + secs.reduce((t, s) => t + cardH(s) + 28, 0) + 60;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const rr = (x, y, w, hh, rad) => { g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, hh, rad); else g.rect(x, y, w, hh); };
+  const fit = (s, w) => { s = String(s); if (g.measureText(s).width <= w) return s; while (s.length > 1 && g.measureText(s + '…').width > w) s = s.slice(0, -1); return s + '…'; };
+  g.fillStyle = C.bg; g.fillRect(0, 0, W, H);
+  g.fillStyle = C.tx; g.font = `700 56px ${F}`; g.fillText(fit(d.title, W - 2 * P), P, P + 64);
+  g.fillStyle = C.sub; g.font = `30px ${F}`; g.fillText(`우리집노트 · ${d.date} 기준`, P, P + 112);
+  let y = P + 150;
+  if (imgH) { g.save(); rr(P, y, W - 2 * P, imgH, 28); g.clip(); g.drawImage(d.img, P, y, W - 2 * P, imgH); g.restore(); y += imgH + 28; }
+  for (const s of secs) {
+    const ch = cardH(s), L = P + CP, R = W - P - CP;
+    g.fillStyle = C.card; rr(P, y, W - 2 * P, ch, 28); g.fill();
+    let yy = y + CP + 36;
+    g.fillStyle = C.sub; g.font = `700 32px ${F}`; g.fillText(fit(s.h, R - L), L, yy); yy += 18;
+    for (const r of s.rows) {
+      const mid = yy + 46;
+      g.font = `700 34px ${F}`; const v = fit(r.v, (R - L) * 0.55), vw = v ? g.measureText(v).width : 0;
+      g.fillStyle = r.done ? C.sub : C[r.em] || C.tx; g.textAlign = 'right'; g.fillText(v, R, mid); g.textAlign = 'left';
+      let lx = L;
+      if (r.mark) {
+        g.fillStyle = r.done ? C.ok : C.line; rr(L, mid - 30, 36, 36, 9); g.fill();
+        if (r.done) { g.strokeStyle = '#fff'; g.lineWidth = 5; g.beginPath(); g.moveTo(L + 8, mid - 12); g.lineTo(L + 16, mid - 4); g.lineTo(L + 29, mid - 21); g.stroke(); }
+        lx += 52;
+      }
+      g.fillStyle = r.done ? C.sub : C.tx; g.font = `34px ${F}`; const t = fit(r.t, R - lx - vw - 24); g.fillText(t, lx, mid);
+      if (r.done) g.fillRect(lx, mid - 11, g.measureText(t).width, 2);
+      if (r.s) { g.fillStyle = C.sub; g.font = `26px ${F}`; g.fillText(fit(r.s, R - lx), lx, mid + 38); }
+      yy += rowH(r);
+      g.fillStyle = C.line; g.fillRect(L, yy - 2, R - L, 2);
+    }
+    if (s.foot) { g.fillStyle = C.tx; g.font = `700 34px ${F}`; g.fillText('합계', L, yy + 48); g.textAlign = 'right'; g.fillText(s.foot, R, yy + 48); g.textAlign = 'left'; }
+    y += ch + 28;
+  }
+  g.fillStyle = C.sub; g.font = `24px ${F}`; g.textAlign = 'center'; g.fillText('우리집노트에서 보냄', W / 2, H - 28); g.textAlign = 'left';
+  return new Promise(res => cv.toBlob(b => res(new File([b], `우리집노트_${d.title.split(' · ')[0].replace(/\s+/g, '')}_${ymd()}.png`, { type: 'image/png' })), 'image/png'));
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e2) { /* 안 됨 */ }
+    ta.remove(); return ok;
+  }
+}
+function saveFile(f) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); }
+async function openShare() {
+  const d = shareDoc(route()), text = shareText(d), file = await shareImage(d), url = URL.createObjectURL(file);
+  const canFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  showSheet(`<h3>카톡으로 공유</h3><img class="shimg" src="${url}" alt="공유 이미지 미리보기">
+    <button class="btn pri" data-sh="both">${canFile ? '카톡으로 보내기 (이미지 + 글)' : '이미지 저장 + 글 복사'}</button>
+    <div class="sub" style="margin:6px 2px 4px">이미지를 보낼 때 글은 자동으로 복사돼요. 카톡 입력창을 길게 눌러 <b>붙여넣기</b> 하세요.</div>
+    <button class="btn" data-sh="text">글만 보내기</button><button class="btn" data-sh="copy">글 복사</button><button class="btn" data-sh="save">이미지 저장</button>
+    <textarea class="shtxt" readonly rows="6">${h(text)}</textarea>`);
+  sheetOnClose = () => URL.revokeObjectURL(url);
+  sheet.onclick = async e => {
+    const b = e.target.closest('[data-sh]'); if (!b) return;
+    const k = b.dataset.sh;
+    if (k === 'copy') return toast(await copyText(text) ? '글을 복사했어요' : '복사하지 못했어요 — 아래 글을 길게 눌러 복사하세요');
+    if (k === 'save') { saveFile(file); return toast('이미지를 저장했어요'); }
+    if (k === 'text') {
+      if (navigator.share) { try { await navigator.share({ text }); } catch (er) { /* 취소 */ } return; }
+      return toast(await copyText(text) ? '공유 기능이 없어 글을 복사했어요' : '아래 글을 길게 눌러 복사하세요');
+    }
+    const ok = await copyText(text);
+    if (!canFile) { saveFile(file); return toast(ok ? '이미지 저장, 글 복사 완료' : '이미지를 저장했어요'); }
+    toast(ok ? '글 복사됨 — 카톡에서 이미지 보낸 뒤 붙여넣기' : '이미지를 보내요');
+    try { await navigator.share({ files: [file], title: d.title }); } catch (er) { /* 취소 */ }
+  };
+}
+
 /* ---------- 이벤트 ---------- */
-$('#topact').addEventListener('click', () => route() === 'pay' ? editPayment() : editItem());
+$('#topact').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  if (b.dataset.act === 'top-share') return openShare().catch(er => { console.warn('share', er); toast('공유 이미지를 만들지 못했어요'); });
+  return route() === 'pay' ? editPayment() : editItem();
+});
 view.addEventListener('input', e => { if (e.target.id === 'q') { UI.q = e.target.value; $('#ilist').innerHTML = itemList(); } });
 view.addEventListener('click', async e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
@@ -752,5 +894,5 @@ async function applyPay() {
   else if (mk) toast(`평면도에 실측 면적을 넣었어요 (방 ${mk}개)`);
   else if (yk) toast(`지급 일정을 업데이트했어요 (${yk}건)`);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.X = { S, applyPack, BUILTIN_PACK, applyM2, BUILTIN_M2, applyPay, BUILTIN_PAY, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
+  window.X = { S, applyPack, BUILTIN_PACK, applyM2, BUILTIN_M2, applyPay, BUILTIN_PAY, shareDoc, shareText, shareImage, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
 })();
