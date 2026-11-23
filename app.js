@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.5';
+const APP_VERSION = '1.1.6';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -695,15 +695,50 @@ async function applyM2() {
   return n;
 }
 
+// 인테리어 공사 계약의 지급 일정(계약금·선수금·중도금·잔금)을 한 번만 넣는다. 업체·계좌 같은 개인 정보는 넣지 않는다.
+//  - 같은 id가 있으면 이름·금액·시점·날짜·분류를 계약 기준으로 바꾸고 메모는 덧붙임. 완료 체크·출처는 그대로
+//  - 없으면 새로 넣음(같은 이름이 이미 있으면 건너뜀)
+//  - 바꾸기 전 지급 전체를 meta 'payBackup'에 남김
+const BUILTIN_PAY = { key: 'interior-pay-2611', rows: [
+  { id: 'p-6', name: '인테리어 계약금 (10%)', amount: 544.7, when: '잔금 전', date: '2026-10-23', order: 6, note: '인테리어 공사 계약 기준 · 총 공사비의 10% · 계약일 지급' },
+  { id: 'p-7', name: '인테리어 선수금 (40%)', amount: 2178.8, when: '잔금일', date: '2026-12-10', order: 7, note: '인테리어 공사 계약 기준 · 40% · 공사 시작(철거)일 지급' },
+  { id: 'p-int-3', name: '인테리어 중도금 (40%)', amount: 2178.8, when: '잔금 후', date: '2026-12-21', order: 7.1, note: '인테리어 공사 계약 기준 · 40% · 타일공사 시작일 지급' },
+  { id: 'p-int-4', name: '인테리어 잔금 (10%)', amount: 544.7, when: '잔금 후', date: '2027-01-09', order: 7.2, note: '인테리어 공사 계약 기준 · 10% · 마감미팅 뒤 지급' },
+] };
+async function applyPay() {
+  const P = BUILTIN_PAY;
+  if (S.meta.paypack === P.key || !hasData()) return 0;
+  const now = Date.now(), byId = new Map(S.payments.map(p => [p.id, p])), names = new Set(S.payments.map(p => normName(p.name)));
+  const out = [];
+  P.rows.forEach(r => {
+    const o = byId.get(r.id), base = { name: r.name, amount: r.amount, when: r.when, date: r.date, cat: '인테리어', needsCheck: false, checkNote: '' };
+    if (o) {
+      if (o.name === r.name && o.amount === r.amount && o.date === r.date && o.when === r.when) return;
+      out.push({ ...o, ...base, note: o.note ? (o.note.includes(r.note) ? o.note : `${o.note} / ${r.note}`) : r.note, updatedAt: now });
+    } else if (!names.has(normName(r.name))) {
+      out.push({ id: r.id, ...base, done: false, source: '', note: r.note, order: r.order, updatedAt: now });
+    }
+  });
+  await tx(['payments', 'meta'], t => {
+    const m = t.objectStore('meta');
+    if (out.length) { m.put({ key: 'payBackup', value: { key: P.key, at: now, payments: S.payments } }); out.forEach(r => t.objectStore('payments').put(r)); }
+    m.put({ key: 'paypack', value: P.key });
+  });
+  await loadAll();
+  return out.length;
+}
+
 /* ---------- 시작 ---------- */
 (async () => {
   db = await openDB(); await loadAll();
   if (!S.meta.firstUse) await setMeta('firstUse', Date.now());
   let pk = 0; try { pk = await applyPack(); } catch (e) { console.warn('pack', e); }
   let mk = 0; try { mk = await applyM2(); } catch (e) { console.warn('m2', e); }
+  let yk = 0; try { yk = await applyPay(); } catch (e) { console.warn('pay', e); }
   render();
   if (pk) toast(`가전 목록을 넣었어요 (새 품목 ${pk.adds}개 · 메모 보강 ${pk.ups}개)`);
   else if (mk) toast(`평면도에 실측 면적을 넣었어요 (방 ${mk}개)`);
+  else if (yk) toast(`인테리어 지급 일정을 넣었어요 (${yk}건)`);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.X = { S, applyPack, BUILTIN_PACK, applyM2, BUILTIN_M2, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
+  window.X = { S, applyPack, BUILTIN_PACK, applyM2, BUILTIN_M2, applyPay, BUILTIN_PAY, importData, clearAll, backupObj, loadAll, render, won, match, put, del, setMeta, APP_VERSION, UI, plan, rArea, drawPlan, HIT: () => HIT, NDIR: () => NDIR };
 })();
