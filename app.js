@@ -2,7 +2,7 @@
 // 출처: [Claude] 설계·작성 / [사용자] 요구사항(2026-11-17 대화)
 // 데이터는 이 기기의 IndexedDB에만 저장한다. 금액 단위는 '만원'.
 'use strict';
-const APP_VERSION = '1.1.7';
+const APP_VERSION = '1.1.8';
 const DB_NAME = 'house-note';
 const STORES = ['scenarios', 'budgets', 'payments', 'items', 'plans'];
 const WHENS = ['잔금 전', '잔금일', '잔금 후', '미정'];
@@ -699,13 +699,14 @@ async function applyM2() {
 //  - 같은 id가 있으면 이름·금액·시점·날짜·분류를 계약 기준으로 바꾸고 메모는 덧붙임. 완료 체크·출처는 그대로
 //  - 없으면 새로 넣음(같은 이름이 이미 있으면 건너뜀)
 //  - 바꾸기 전 지급 전체를 meta 'payBackup'에 남김
-//  - always: 값이 같아도 메모가 없으면 덧붙임(이사 계약금처럼 확인 결과만 남길 때). keepAmount: 금액은 건드리지 않음
-const BUILTIN_PAY = { key: 'pay-2611b', rows: [
-  { id: 'p-8', name: '이사 계약금', amount: 50, when: '잔금 전', date: '', order: 8, always: true, keepAmount: true, cat: '이사',
-    note: '[확인 11/23] 잔금 전 필요 맞음 — 잔금일(12/10)에 전세금을 쓰므로 그 전에 짐을 빼야 하고(추정), 입주는 1/13이라 이사(보관이사) 업체를 미리 예약해야 함. 계약금은 예약할 때 냄(보통 1~2달 전)' },
-  { id: 'p-9', name: '이사 잔금', amount: null, when: '잔금 후', date: '2027-01-13', order: 9, always: true, keepAmount: true, cat: '이사',
+//  - always: 값이 같아도 메모가 없으면 덧붙임(확인 결과만 남길 때). keepAmount: 금액은 건드리지 않음. drop: 이 글자로 시작하는 옛 메모 조각은 지움
+//  - 옛 key(v1.1.6·1.1.7)를 이미 넣은 폰은 인테리어 행을 건너뜀(그 뒤 사용자가 고친 값 보호)
+const BUILTIN_PAY = { key: 'pay-2611c', rows: [
+  { id: 'p-8', name: '이사 계약금', amount: 50, when: '잔금 후', date: '', order: 8, always: true, keepAmount: true, cat: '이사', drop: '[확인 11/23]',
+    note: '[11/23 정정] 이사는 인테리어 끝난 뒤(1/13)라 잔금 전에 낼 필요 없음 — 업체 예약할 때 냄(보통 이사 1달 전쯤 → 12월 중순). 원하는 날·업체를 일찍 잡고 싶으면 미리 내도 됨' },
+  { id: 'p-9', name: '이사 잔금', amount: null, when: '잔금 후', date: '2027-01-13', order: 9, always: true, keepAmount: true, cat: '이사', drop: '[확인 11/23]',
     needsCheck: true, checkNote: '금액 미정 — 이사 업체 견적 후 입력',
-    note: '[확인 11/23] 입주 이사 1/13(인테리어 일정표 기준) 짐 받은 뒤 지급. 보관이사면 업체에 따라 짐 뺄 때 일부 정산할 수 있음' },
+    note: '[11/23 정정] 인테리어 끝난 뒤 1/13 이사(일정표 기준), 짐 받은 뒤 지급' },
   { id: 'p-6', name: '인테리어 계약금 (10%)', amount: 544.7, when: '잔금 전', date: '2026-10-23', order: 6, note: '인테리어 공사 계약 기준 · 총 공사비의 10% · 계약일 지급' },
   { id: 'p-7', name: '인테리어 선수금 (40%)', amount: 2178.8, when: '잔금일', date: '2026-12-10', order: 7, note: '인테리어 공사 계약 기준 · 40% · 공사 시작(철거)일 지급' },
   { id: 'p-int-3', name: '인테리어 중도금 (40%)', amount: 2178.8, when: '잔금 후', date: '2026-12-21', order: 7.1, note: '인테리어 공사 계약 기준 · 40% · 타일공사 시작일 지급' },
@@ -715,16 +716,17 @@ async function applyPay() {
   const P = BUILTIN_PAY;
   if (S.meta.paypack === P.key || !hasData()) return 0;
   const now = Date.now(), byId = new Map(S.payments.map(p => [p.id, p])), names = new Set(S.payments.map(p => normName(p.name)));
-  const out = [], had1 = S.meta.paypack === 'interior-pay-2611'; // v1.1.6에서 인테리어 4건을 이미 넣었으면 그 뒤 고친 값은 건드리지 않음
+  const out = [], had1 = ['interior-pay-2611', 'pay-2611b'].includes(S.meta.paypack);
   P.rows.forEach(r => {
     if (had1 && r.cat !== '이사') return;
     const o = byId.get(r.id), base = { name: r.name, amount: r.amount, when: r.when, date: r.date, cat: r.cat || '인테리어', needsCheck: !!r.needsCheck, checkNote: r.checkNote || '' };
     if (o && r.keepAmount) { base.amount = o.amount ?? r.amount; if (o.amount != null) { base.needsCheck = false; base.checkNote = ''; } }
     if (o && !r.date) base.date = o.date || '';
     if (o) {
-      const same = o.name === base.name && o.amount === base.amount && (o.date || '') === base.date && o.when === base.when;
-      if (same && (!r.always || (o.note || '').includes(r.note))) return;
-      out.push({ ...o, ...base, note: o.note ? (o.note.includes(r.note) ? o.note : `${o.note} / ${r.note}`) : r.note, updatedAt: now });
+      const on = r.drop ? (o.note || '').split(' / ').filter(x => !x.startsWith(r.drop)).join(' / ') : (o.note || '');
+      const same = o.name === base.name && o.amount === base.amount && (o.date || '') === base.date && o.when === base.when && on === (o.note || '');
+      if (same && (!r.always || on.includes(r.note))) return;
+      out.push({ ...o, ...base, note: on ? (on.includes(r.note) ? on : `${on} / ${r.note}`) : r.note, updatedAt: now });
     } else if (!names.has(normName(r.name))) {
       out.push({ id: r.id, ...base, done: false, source: '', note: r.note, order: r.order, updatedAt: now });
     }

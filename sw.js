@@ -1,6 +1,6 @@
 // 우리집노트 서비스워커 — 출처: [Claude] 작성
 // 배포할 때마다 CACHE 이름과 app.js의 APP_VERSION을 함께 올린다.
-const CACHE = 'house-note-v1.1.7';
+const CACHE = 'house-note-v1.1.8';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png'];
 
